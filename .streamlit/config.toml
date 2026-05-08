@@ -1,6 +1,6 @@
 [theme]
-primaryColor = "#1C83E1"             # O azul da sua marca
-backgroundColor = "#0B0E14"          # Um preto levemente azulado
-secondaryBackgroundColor = "#1A1F29" # Sidebar e cards num tom mais claro
-textColor = "#E0E0E0"                # Cinza claro para não cansar a vista
-font = "sans serif"
+primaryColor = "#00D1FF"             # Um azul mais "neon" para destacar
+backgroundColor = "#121212"          # Preto puro para contraste máximo
+secondaryBackgroundColor = "#1E1E1E" # Cinza chumbo
+textColor = "#FFFFFF"                # Branco puro
+font = "serif"                       # Serif traz um ar de software premium/clássico
