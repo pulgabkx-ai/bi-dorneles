@@ -15,18 +15,19 @@ def conectar_google_sheets():
     escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     
     try:
-        # Carrega dos Secrets
+        # Carrega os segredos do painel do Streamlit
         info_chaves = dict(st.secrets["gcp_service_account"])
         
-        # LIMPEZA CRÍTICA DA CHAVE: Resolve o erro 'Invalid JWT Signature'
+        # --- LIMPEZA DE ASSINATURA ---
         if "private_key" in info_chaves:
-            # Remove aspas extras, espaços e garante as quebras de linha corretas
-            key = info_chaves["private_key"].strip()
-            if "\\n" in key:
-                key = key.replace("\\n", "\n")
-            info_chaves["private_key"] = key
+            pk = info_chaves["private_key"]
+            # Remove aspas residuais e espaços nas extremidades
+            pk = pk.strip().strip('"').strip("'")
+            # Converte a sequência literal \n em quebras de linha reais
+            pk = pk.replace("\\n", "\n")
+            info_chaves["private_key"] = pk
 
-        # Força o endpoint estável
+        # Usa o endpoint mais estável do Google
         info_chaves["token_uri"] = "https://accounts.google.com/o/oauth2/token"
             
         creds = Credentials.from_service_account_info(info_chaves, scopes=escopos)
@@ -37,7 +38,6 @@ def conectar_google_sheets():
         
     except Exception as e:
         st.error(f"Erro de Autenticação (JWT): {e}")
-        st.info("Dica: Verifique se a 'private_key' nos Secrets começa com '-----BEGIN PRIVATE KEY-----' e termina corretamente.")
         st.stop()
 
 @st.cache_data(ttl=60)
@@ -57,29 +57,25 @@ def buscar_e_limpar_dados():
     
     # Tratamento de Datas
     df['Data de Entrada'] = pd.to_datetime(df['Data de Entrada'], dayfirst=True, errors='coerce')
-    df['Dias em Processo'] = (datetime.now() - df['Data de Entrada']).dt.days.fillna(0).astype(int)
     return df
 
-# Inicialização
+# Inicialização do App
 try:
     df_base = buscar_e_limpar_dados()
 except Exception as e:
     st.error(f"Erro ao processar dados: {e}")
     st.stop()
 
-# 3. DASHBOARD SIMPLIFICADO (Para teste de carga)
+# 3. INTERFACE SIMPLIFICADA
 st.title("📊 BI Dorneles Soluções")
-st.sidebar.header("🎯 Filtros")
 
-# Filtros
-sel_op = st.sidebar.multiselect("Operadores", options=sorted(df_base['Operador'].unique()), default=sorted(df_base['Operador'].unique()))
-df_f = df_base[df_base['Operador'].isin(sel_op)]
+# Resumo rápido para confirmar que funcionou
+m1, m2, m3 = st.columns(3)
+m1.metric("Total de Leads", len(df_base))
+m2.metric("Valor Orçado", f"R$ {df_base['Valor Estimado'].sum():,.2f}")
+m3.metric("Faturamento", f"R$ {df_base[df_base['Status'].str.lower() == 'fechado']['Valor Final'].sum():,.2f}")
 
-m1, m2 = st.columns(2)
-m1.metric("Total Orçado", f"R$ {df_f['Valor Estimado'].sum():,.2f}")
-m2.metric("Faturamento", f"R$ {df_f[df_f['Status'].str.lower() == 'fechado']['Valor Final'].sum():,.2f}")
+st.subheader("Visualização dos Dados")
+st.dataframe(df_base, use_container_width=True)
 
-st.subheader("📋 Base de Dados Atualizada")
-st.dataframe(df_f, use_container_width=True)
-
-st.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.caption(f"Sincronizado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
