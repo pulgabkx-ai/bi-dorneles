@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv
+venv/
+env/
+
+# Streamlit e Logs
+.streamlit/
+tunnel.log
+streamlit_history.log
+*.log
+
+# Segurança (Opcional se o repositório for privado, mas recomendado)
+# Se você quiser que o JSON vá para o GitHub, remova a linha abaixo.
+# credenciais-dorneles.json
