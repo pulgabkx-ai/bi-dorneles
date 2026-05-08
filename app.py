@@ -9,22 +9,16 @@ import time
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="BI Dorneles Soluções", layout="wide", page_icon="📊")
 
-# 2. FUNÇÕES DE DADOS (Com Resiliência e Secrets)
+# 2. FUNÇÕES DE DADOS (Máxima Resiliência)
 @st.cache_resource
 def conectar_google_sheets():
-    """Faz a conexão com a API do Google usando retry para falhas de rede."""
-    escopos = [
-        "https://www.googleapis.com/auth/spreadsheets", 
-        "https://www.googleapis.com/auth/drive"
-    ]
+    """Conexão com retry agressivo para instabilidades de rede no Streamlit Cloud."""
+    escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     
-    # Tenta conectar até 3 vezes caso o DNS falhe
-    for tentativa in range(3):
+    # Tentaremos 5 vezes com intervalos crescentes
+    for tentativa in range(5):
         try:
-            # Puxa o dicionário das chaves configuradas nos Secrets do Streamlit
             info_chaves = dict(st.secrets["gcp_service_account"])
-            
-            # Ajuste para garantir que as quebras de linha da chave privada sejam lidas corretamente
             if "private_key" in info_chaves:
                 info_chaves["private_key"] = info_chaves["private_key"].replace("\\n", "\n")
                 
@@ -35,24 +29,20 @@ def conectar_google_sheets():
             return client.open_by_url(url_da_planilha).sheet1
             
         except Exception as e:
-            if tentativa < 2:
-                time.sleep(2) # Espera 2 segundos antes de tentar novamente
+            if tentativa < 4:
+                # Espera 2, 4, 6... segundos antes de tentar de novo
+                time.sleep(2 * (tentativa + 1)) 
                 continue
             else:
                 st.error(f"Erro crítico de conexão: {e}")
-                st.info("Dica: Verifique se as chaves nos Secrets estão corretas ou dê um Reboot no App.")
                 st.stop()
 
 @st.cache_data(ttl=60)
 def buscar_e_limpar_dados():
-    """Busca os dados da aba e aplica o tratamento de limpeza."""
     aba = conectar_google_sheets()
     df = pd.DataFrame(aba.get_all_records())
-    
-    # Limpeza de nomes de colunas
     df.columns = df.columns.str.strip()
     
-    # Tratamento de Moeda (Converte R$ para Float)
     colunas_moeda = ['Valor Estimado', 'Valor Final', 'Custo Frete']
     for col in colunas_moeda:
         if col in df.columns:
@@ -61,30 +51,24 @@ def buscar_e_limpar_dados():
                 errors='coerce'
             ).fillna(0)
     
-    # Tratamento de Datas
     df['Data de Entrada'] = pd.to_datetime(df['Data de Entrada'], dayfirst=True, errors='coerce')
-    
-    # Cálculo de Dias em Processo
     df['Dias em Processo'] = (datetime.now() - df['Data de Entrada']).dt.days.fillna(0).astype(int)
-    
     return df
 
-# Inicialização do carregamento de dados
+# Inicialização
 try:
     df_base = buscar_e_limpar_dados()
 except Exception as e:
-    st.error(f"Erro ao processar dados da planilha: {e}")
+    st.error(f"Erro ao carregar dados: {e}")
     st.stop()
 
-# 3. BARRA LATERAL - FILTROS
+# 3. BARRA LATERAL
 st.sidebar.header("🎯 Painel de Controle")
 
-# Filtro de Período
 data_min = df_base['Data de Entrada'].min().to_pydatetime()
 data_max = df_base['Data de Entrada'].max().to_pydatetime()
 periodo = st.sidebar.date_input("Período de Entrada", value=(data_min, data_max))
 
-# Filtros Dinâmicos
 def criar_filtro(titulo, coluna):
     opcoes = sorted(df_base[coluna].unique().tolist())
     return st.sidebar.multiselect(titulo, options=opcoes, default=opcoes)
@@ -93,22 +77,17 @@ sel_operadores = criar_filtro("Operadores", "Operador")
 sel_status = criar_filtro("Status Atual", "Status")
 sel_cidades = criar_filtro("Cidades", "Cidade")
 
-# 4. LÓGICA DE FILTRAGEM
+# 4. FILTRAGEM
 df_f = df_base.copy()
 if len(periodo) == 2:
     df_f = df_f[(df_f['Data de Entrada'].dt.date >= periodo[0]) & (df_f['Data de Entrada'].dt.date <= periodo[1])]
 
-df_f = df_f[
-    (df_f['Operador'].isin(sel_operadores)) & 
-    (df_f['Status'].isin(sel_status)) & 
-    (df_f['Cidade'].isin(sel_cidades))
-]
+df_f = df_f[(df_f['Operador'].isin(sel_operadores)) & (df_f['Status'].isin(sel_status)) & (df_f['Cidade'].isin(sel_cidades))]
 
-# 5. ESTRUTURA DE ABAS
+# 5. UI
 st.title("📊 BI Dorneles Soluções")
 tab_sucesso, tab_perdas, tab_ads = st.tabs(["🚀 Visão Geral", "🔍 Análise de Perdas", "📱 Meta Ads"])
 
-# --- ABA 1: VISÃO GERAL ---
 with tab_sucesso:
     m1, m2, m3, m4 = st.columns(4)
     total_est = df_f['Valor Estimado'].sum()
@@ -120,39 +99,36 @@ with tab_sucesso:
     m3.metric("Investimento Frete", f"R$ {df_f['Custo Frete'].sum():,.2f}")
     m4.metric("Ticket Médio", f"R$ {(total_fat/len(df_fechado) if len(df_fechado) > 0 else 0):,.2f}")
 
-    st.markdown("---")
     col1, col2 = st.columns(2)
-
     with col1:
-        st.subheader("🎯 Funil de Vendas")
         df_funnel = df_f.groupby('Status')['Valor Estimado'].sum().reset_index().sort_values('Valor Estimado', ascending=False)
         mapa_cores = {"Perdido": "#FF4B4B", "Fechado": "#2E8B57", "Em Aberto": "#1C83E1", "Orçamento Gerado": "#FACA2E"}
         fig_funnel = px.funnel(df_funnel, y='Status', x='Valor Estimado', color='Status', color_discrete_map=mapa_cores)
         st.plotly_chart(fig_funnel, use_container_width=True)
-
     with col2:
-        st.subheader("🚀 Faturamento por Operador")
-        fig_op = px.bar(df_f.groupby('Operador')['Valor Final'].sum().reset_index(), 
-                        x='Operador', y='Valor Final', text_auto='.2s', color_discrete_sequence=['#2E8B57'])
+        fig_op = px.bar(df_f.groupby('Operador')['Valor Final'].sum().reset_index(), x='Operador', y='Valor Final', text_auto='.2s', color_discrete_sequence=['#2E8B57'])
         st.plotly_chart(fig_op, use_container_width=True)
 
     st.subheader("📋 Detalhes dos Leads")
-    col_vis = ['Data de Entrada', 'Cliente', 'Material Solicitado', 'Status', 'Operador', 'Valor Estimado', 'Valor Final', 'Dias em Processo']
-    st.dataframe(df_f[col_vis], use_container_width=True, hide_index=True)
+    st.dataframe(df_f[['Data de Entrada', 'Cliente', 'Status', 'Operador', 'Valor Estimado', 'Valor Final']], use_container_width=True, hide_index=True)
 
-# --- ABA 2: ANÁLISE DE PERDAS ---
 with tab_perdas:
     df_p = df_f[df_f['Status'].str.lower() == 'perdido']
-    
     if df_p.empty:
-        st.success("Nenhuma perda registrada no período selecionado!")
+        st.success("Nenhuma perda registrada!")
     else:
         st.header("❌ Análise de Desistências")
         cp1, cp2 = st.columns(2)
-        
         with cp1:
             motivos = df_p[df_p['Motivo da Perda'].str.strip() != '']
             if not motivos.empty:
-                st.subheader("Por que perdemos? (R$)")
-                fig_pie = px.pie(motivos, names='Motivo da Perda', values='Valor Estimado', 
-                                 hole=0.4, color_discrete_sequence=px.colors.sequential.Reds_r)
+                fig_pie = px.pie(motivos, names='Motivo da Perda', values='Valor Estimado', hole=0.4, color_discrete_sequence=px.colors.sequential.Reds_r)
+                st.plotly_chart(fig_pie, use_container_width=True)
+        with cp2:
+            fig_p_op = px.bar(df_p.groupby('Operador')['Valor Estimado'].sum().reset_index(), x='Operador', y='Valor Estimado', color_discrete_sequence=['#8B0000'])
+            st.plotly_chart(fig_p_op, use_container_width=True)
+
+with tab_ads:
+    st.info("🚧 Módulo Meta Ads em desenvolvimento.")
+
+st.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
