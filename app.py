@@ -12,7 +12,6 @@ st.set_page_config(page_title="BI Dorneles Soluções", layout="wide", page_icon
 def formatar_brl(valor):
     """Converte float para string no padrão R$ 1.234,56"""
     try:
-        # Garante que o valor seja numérico antes de formatar
         valor_float = float(valor)
         return f"R$ {valor_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except (ValueError, TypeError):
@@ -43,7 +42,6 @@ def buscar_e_limpar_dados():
     if df.empty: return df
     df.columns = [str(col).strip() for col in df.columns]
     
-    # Tratamento de Moeda para cálculos internos (Mantém como float)
     colunas_moeda = ['Valor Estimado', 'Valor Final', 'Custo Frete']
     for col in colunas_moeda:
         if col in df.columns:
@@ -87,7 +85,6 @@ st.title("📊 BI Dorneles Soluções")
 tab_sucesso, tab_perdas, tab_ads = st.tabs(["🚀 Visão Geral", "🔍 Análise de Perdas", "📱 Meta Ads"])
 
 with tab_sucesso:
-    # --- MÉTRICAS COM R$ ---
     m1, m2, m3, m4 = st.columns(4)
     total_est = df_f['Valor Estimado'].sum()
     df_fechado = df_f[df_f['Status'].astype(str).str.lower() == 'fechado']
@@ -106,28 +103,42 @@ with tab_sucesso:
     with col1:
         st.subheader("🎯 Funil de Vendas (R$)")
         df_funnel = df_f.groupby('Status')['Valor Estimado'].sum().reset_index().sort_values('Valor Estimado', ascending=False)
-        # Formata o texto que aparece ao passar o mouse no gráfico
         fig_funnel = px.funnel(df_funnel, y='Status', x='Valor Estimado', color='Status')
-        fig_funnel.update_traces(texttemplate="R$ %{value:,.2f}") # Exibe R$ dentro das barras
+        fig_funnel.update_traces(texttemplate="R$ %{value:,.2f}")
         st.plotly_chart(fig_funnel, use_container_width=True)
 
     with col2:
         st.subheader("🚀 Faturamento por Operador")
         df_op = df_f.groupby('Operador')['Valor Final'].sum().reset_index()
-        # Formata o texto acima das barras
         fig_op = px.bar(df_op, x='Operador', y='Valor Final', color_discrete_sequence=['#2E8B57'])
         fig_op.update_traces(texttemplate="R$ %{y:,.2f}", textposition='outside')
         st.plotly_chart(fig_op, use_container_width=True)
 
     st.subheader("📋 Detalhes dos Leads")
-    # --- TABELA COM R$ ---
     df_display = df_f.copy()
+    
+    # Formatação de Moeda para a Tabela
     colunas_venda = ['Valor Estimado', 'Valor Final', 'Custo Frete']
     for col in colunas_venda:
         if col in df_display.columns:
             df_display[col] = df_display[col].apply(formatar_brl)
     
-    st.dataframe(df_display, use_container_width=True, hide_index=True)
+    # Exibição da Tabela com Links Ativos
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Link para Pasta": st.column_config.LinkColumn(
+                "📂 Pasta do Projeto",
+                display_text="Abrir Pasta"
+            ),
+            "Link para o Whatsapp": st.column_config.LinkColumn(
+                "💬 WhatsApp",
+                display_text="Enviar Mensagem"
+            )
+        }
+    )
 
 with tab_perdas:
     df_p = df_f[df_f['Status'].astype(str).str.lower() == 'perdido']
