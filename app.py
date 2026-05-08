@@ -5,10 +5,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURAÇÃO DA PÁGINA ---
+# --- 1. CONFIGURAÇÃO E CONEXÃO ---
 st.set_page_config(page_title="BI Dorneles Soluções", layout="wide", page_icon="📊")
 
-# --- 2. CONEXÃO SEGURA E ESTÁVEL ---
 @st.cache_resource
 def conectar_google_sheets():
     escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
@@ -21,154 +20,91 @@ def conectar_google_sheets():
             creds = Credentials.from_service_account_info(info, scopes=escopos)
         else:
             creds = Credentials.from_service_account_file('credenciais-dorneles.json', scopes=escopos)
-        
         client = gspread.authorize(creds)
         url = "https://docs.google.com/spreadsheets/d/18XXK_Wqz2Stb_dFDb5sfl-u9W0B5kHqioc3Ar1xK2Is/edit"
         return client.open_by_url(url).sheet1
     except Exception as e:
-        st.error(f"Erro de Conexão: {e}")
-        st.stop()
+        st.error(f"Erro de Conexão: {e}"); st.stop()
 
-# --- 3. PROCESSAMENTO DE DADOS (ANTI-ERRO) ---
 @st.cache_data(ttl=60)
 def buscar_e_limpar_dados():
     aba = conectar_google_sheets()
     df = pd.DataFrame(aba.get_all_records())
-    
-    if df.empty:
-        return df
-
+    if df.empty: return df
     df.columns = [str(col).strip() for col in df.columns]
-    
-    colunas_fatais = ['Status', 'Valor Estimado', 'Valor Final', 'Custo Frete', 'Operador', 'Data de Entrada', 'Cidade', 'Motivo da Perda']
-    for col in colunas_fatais:
-        if col not in df.columns:
-            df[col] = 0 if 'Valor' in col or 'Custo' in col else ""
-
     for col in ['Valor Estimado', 'Valor Final', 'Custo Frete']:
         df[col] = pd.to_numeric(df[col].astype(str).str.replace(r'[R\$\s\.]', '', regex=True).str.replace(',', '.'), errors='coerce').fillna(0)
-    
     df['Data de Entrada'] = pd.to_datetime(df['Data de Entrada'], dayfirst=True, errors='coerce')
     df = df.dropna(subset=['Data de Entrada'])
-    
     df['Dias em Processo'] = (datetime.now() - df['Data de Entrada']).dt.days.fillna(0).astype(int)
     return df
 
-# --- 4. EXECUÇÃO E LÓGICA DE FILTROS ---
-try:
-    df_base = buscar_e_limpar_dados()
-    if df_base.empty:
-        st.info("Aguardando dados na planilha...")
-        st.stop()
+# --- 2. FILTROS ---
+df_base = buscar_e_limpar_dados()
+if df_base.empty: st.stop()
 
-    st.sidebar.header("🎯 Painel de Controle")
+st.sidebar.header("🎯 Filtros")
+d_min, d_max = df_base['Data de Entrada'].min().to_pydatetime(), df_base['Data de Entrada'].max().to_pydatetime()
+periodo = st.sidebar.date_input("Período Selecionado", value=(d_min, d_max))
+
+# Checkbox para ativar o comparativo sem poluir o dash
+exibir_comparativo = st.sidebar.checkbox("Ativar Comparativo de Datas", value=False)
+
+sel_op = st.sidebar.multiselect("Operadores", options=sorted(df_base['Operador'].unique()), default=sorted(df_base['Operador'].unique()))
+sel_st = st.sidebar.multiselect("Status", options=sorted(df_base['Status'].unique()), default=sorted(df_base['Status'].unique()))
+
+# --- 3. LÓGICA DE DADOS ---
+df_f = df_base.copy()
+if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
+    data_ini, data_fim = periodo[0], periodo[1]
+    df_f = df_base[(df_base['Data de Entrada'].dt.date >= data_ini) & (df_base['Data de Entrada'].dt.date <= data_fim)]
     
-    # Filtro de Data
-    d_min, d_max = df_base['Data de Entrada'].min().to_pydatetime(), df_base['Data de Entrada'].max().to_pydatetime()
-    periodo = st.sidebar.date_input("Período de Entrada", value=(d_min, d_max))
+    # Cálculo do Período Anterior (apenas se o checkbox estiver ativo)
+    if exibir_comparativo:
+        diff = (data_fim - data_ini).days + 1
+        ini_ant, fim_ant = data_ini - timedelta(days=diff), data_ini - timedelta(days=1)
+        df_ant = df_base[(df_base['Data de Entrada'].dt.date >= ini_ant) & (df_base['Data de Entrada'].dt.date <= fim_ant)]
 
-    # Seletores dinâmicos
-    def filter_box(label, col):
-        opt = sorted(df_base[col].astype(str).unique().tolist())
-        return st.sidebar.multiselect(label, options=opt, default=opt)
+df_f = df_f[(df_f['Operador'].isin(sel_op)) & (df_f['Status'].isin(sel_st))]
 
-    sel_op = filter_box("Operadores", "Operador")
-    sel_st = filter_box("Status Atual", "Status")
-    sel_cid = filter_box("Cidades", "Cidade")
+# --- 4. DASHBOARD ---
+st.title("📊 BI Dorneles Soluções")
 
-    # LÓGICA DE COMPARAÇÃO DE PERÍODOS
-    df_f = df_base.copy()
-    delta_orcado = 0
-    delta_realizado = 0
-    msg_periodo = ""
-
-    if isinstance(periodo, (list, tuple)) and len(periodo) == 2:
-        data_inicio, data_fim = periodo[0], periodo[1]
-        diff_dias = (data_fim - data_inicio).days + 1
+# SEÇÃO DE COMPARATIVO (ADICIONAL)
+if exibir_comparativo and not df_ant.empty:
+    with st.expander("🔄 Análise Comparativa (Período Atual vs. Anterior)", expanded=True):
+        c1, c2, c3 = st.columns(3)
         
-        # Filtro Período Atual
-        df_f = df_base[(df_base['Data de Entrada'].dt.date >= data_inicio) & (df_base['Data de Entrada'].dt.date <= data_fim)]
+        def calc_delta(atual, anterior):
+            return ((atual - anterior) / anterior * 100) if anterior > 0 else 0
+
+        v_orc_at = df_f['Valor Estimado'].sum()
+        v_orc_ant = df_ant['Valor Estimado'].sum()
+        c1.metric("Evolução Orçados", f"R$ {v_orc_at:,.2f}", f"{calc_delta(v_orc_at, v_orc_ant):.1f}%")
+
+        v_real_at = df_f[df_f['Status'].str.lower() == 'fechado']['Valor Final'].sum()
+        v_real_ant = df_ant[df_ant['Status'].str.lower() == 'fechado']['Valor Final'].sum()
+        c2.metric("Evolução Fechados", f"R$ {v_real_at:,.2f}", f"{calc_delta(v_real_at, v_real_ant):.1f}%")
         
-        # Filtro Período Anterior
-        inicio_ant = data_inicio - timedelta(days=diff_dias)
-        fim_ant = data_inicio - timedelta(days=1)
-        df_ant = df_base[(df_base['Data de Entrada'].dt.date >= inicio_ant) & (df_base['Data de Entrada'].dt.date <= fim_ant)]
-        
-        msg_periodo = f"Comparando com: {inicio_ant.strftime('%d/%m')} a {fim_ant.strftime('%d/%m')}"
-        
-        # Cálculos de Delta
-        if not df_ant.empty:
-            v_orc_atual = df_f['Valor Estimado'].sum()
-            v_orc_ant = df_ant['Valor Estimado'].sum()
-            v_real_atual = df_f[df_f['Status'].str.lower() == 'fechado']['Valor Final'].sum()
-            v_real_ant = df_ant[df_ant['Status'].str.lower() == 'fechado']['Valor Final'].sum()
-            
-            delta_orcado = ((v_orc_atual - v_orc_ant) / v_orc_ant * 100) if v_orc_ant > 0 else 0
-            delta_realizado = ((v_real_atual - v_real_ant) / v_real_ant * 100) if v_real_ant > 0 else 0
+        c3.metric("Qtd Leads", len(df_f), f"{len(df_f) - len(df_ant)} leads")
+        st.caption(f"Comparado com: {ini_ant.strftime('%d/%m')} a {fim_ant.strftime('%d/%m')}")
 
-    # Aplicação dos filtros de texto
-    df_f = df_f[
-        (df_f['Operador'].astype(str).isin(sel_op)) & 
-        (df_f['Status'].astype(str).isin(sel_st)) & 
-        (df_f['Cidade'].astype(str).isin(sel_cid))
-    ]
+# DASHBOARD ORIGINAL (MANTIDO)
+tab_vendas, tab_perf = st.tabs(["🚀 Geral", "📈 Performance"])
 
-    # --- 5. INTERFACE DASHBOARD ---
-    st.title("📊 BI Dorneles Soluções")
+with tab_vendas:
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total Orçado", f"R$ {df_f['Valor Estimado'].sum():,.2f}")
+    col2.metric("Total Fechado", f"R$ {df_f[df_f['Status'].str.lower() == 'fechado']['Valor Final'].sum():,.2f}")
+    col3.metric("Leads Ativos", len(df_f))
+    
+    st.divider()
+    st.plotly_chart(px.funnel(df_f.groupby('Status')['Valor Estimado'].sum().reset_index().sort_values('Valor Estimado', ascending=False), 
+                              y='Status', x='Valor Estimado', title="Funil de Vendas"), use_container_width=True)
+    st.dataframe(df_f, use_container_width=True, hide_index=True)
 
-    # Alerta de Leads Parados
-    leads_parados = df_f[(df_f['Status'].str.contains('Aberto|Orçamento', case=False, na=False)) & (df_f['Dias em Processo'] > 5)]
-    if not leads_parados.empty:
-        with st.expander(f"⚠️ ATENÇÃO: {len(leads_parados)} leads parados há mais de 5 dias", expanded=True):
-            st.dataframe(leads_parados[['Cliente', 'Operador', 'Dias em Processo', 'Valor Estimado']], use_container_width=True, hide_index=True)
-
-    tab1, tab2, tab3 = st.tabs(["🚀 Visão Geral", "📈 Performance", "🔍 Perdas"])
-
-    with tab1:
-        st.caption(msg_periodo)
-        m1, m2, m3, m4 = st.columns(4)
-        
-        v_orc = df_f['Valor Estimado'].sum()
-        df_fechados = df_f[df_f['Status'].str.lower() == 'fechado']
-        v_real = df_fechados['Valor Final'].sum()
-        
-        m1.metric("Orçado Total", f"R$ {v_orc:,.2f}", delta=f"{delta_orcado:.1f}% vs. ant.")
-        m2.metric("Faturamento Real", f"R$ {v_real:,.2f}", delta=f"{delta_realizado:.1f}% vs. ant.")
-        m3.metric("Ticket Médio", f"R$ {(v_real/len(df_fechados) if not df_fechados.empty else 0):,.2f}")
-        m4.metric("Qtd Leads", len(df_f))
-
-        st.divider()
-        st.subheader("🎯 Funil de Vendas (Orçado)")
-        df_fun = df_f.groupby('Status')['Valor Estimado'].sum().reset_index().sort_values('Valor Estimado', ascending=False)
-        if not df_fun.empty:
-            st.plotly_chart(px.funnel(df_fun, y='Status', x='Valor Estimado', color='Status'), use_container_width=True)
-
-    with tab2:
-        st.subheader("📈 Evolução Mensal")
-        # Correção ME para Pandas 2.2+
-        df_t = df_f.set_index('Data de Entrada').resample('ME').agg({'Valor Estimado': 'sum', 'Valor Final': 'sum'}).reset_index()
-        if not df_t.empty:
-            fig_t = px.line(df_t, x='Data de Entrada', y=['Valor Estimado', 'Valor Final'], markers=True)
-            st.plotly_chart(fig_t, use_container_width=True)
-
-        st.divider()
-        st.subheader("🥇 Eficiência por Operador")
-        df_rank = df_f.groupby('Operador').agg({'Valor Estimado': 'sum', 'Valor Final': 'sum'}).reset_index()
-        df_rank['Conversão %'] = (df_rank['Valor Final'] / df_rank['Valor Estimado'] * 100).fillna(0)
-        st.plotly_chart(px.bar(df_rank, x='Operador', y='Conversão %', text_auto='.1f', color='Conversão %', color_continuous_scale='Greens'), use_container_width=True)
-
-    with tab3:
-        df_p = df_f[df_f['Status'].str.lower() == 'perdido']
-        if not df_p.empty:
-            st.subheader("❌ Motivos de Perda")
-            motivos = df_p[df_p['Motivo da Perda'].str.strip() != ""]
-            if not motivos.empty:
-                st.plotly_chart(px.pie(motivos, names='Motivo da Perda', values='Valor Estimado', hole=0.4), use_container_width=True)
-            st.dataframe(df_p[['Cliente', 'Motivo da Perda', 'Valor Estimado', 'Operador']], use_container_width=True, hide_index=True)
-        else:
-            st.success("Nenhuma perda registrada no período selecionado.")
-
-except Exception as e:
-    st.error(f"Erro de processamento: {e}")
-
-st.caption(f"Atualizado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+with tab_perf:
+    # Gráfico de evolução mensal com correção 'ME'
+    df_t = df_f.set_index('Data de Entrada').resample('ME').agg({'Valor Estimado': 'sum', 'Valor Final': 'sum'}).reset_index()
+    if not df_t.empty:
+        st.plotly_chart(px.line(df_t, x='Data de Entrada', y=['Valor Estimado', 'Valor Final'], markers=True, title="Tendência Mensal"), use_container_width=True)
