@@ -156,22 +156,3 @@ with tab_perdas:
                 st.subheader("Por que perdemos? (R$)")
                 fig_pie = px.pie(motivos, names='Motivo da Perda', values='Valor Estimado', 
                                  hole=0.4, color_discrete_sequence=px.colors.sequential.Reds_r)
-                st.plotly_chart(fig_pie, use_container_width=True)
-            else:
-                st.warning("Sem motivos de perda preenchidos na planilha.")
-        
-        with cp2:
-            st.subheader("Perdas por Operador")
-            fig_p_op = px.bar(df_p.groupby('Operador')['Valor Estimado'].sum().reset_index(), 
-                              x='Operador', y='Valor Estimado', color_discrete_sequence=['#8B0000'])
-            st.plotly_chart(fig_p_op, use_container_width=True)
-
-        st.subheader("📝 Lista de Oportunidades Perdidas")
-        st.dataframe(df_p[['Data de Entrada', 'Cliente', 'Motivo da Perda', 'Valor Estimado', 'Operador']], 
-                     use_container_width=True, hide_index=True)
-
-# --- ABA 3: META ADS ---
-with tab_ads:
-    st.info("🚧 Módulo Meta Ads em desenvolvimento para a Dorneles Soluções. Em breve teremos dados de CPL e ROI.")
-
-st.caption(f"Última atualização: {datetime.now().strftime
