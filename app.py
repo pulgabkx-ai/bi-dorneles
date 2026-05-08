@@ -4,35 +4,48 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import time
 
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="BI Dorneles Soluções", layout="wide", page_icon="📊")
 
-# 2. FUNÇÕES DE DADOS (Otimizadas com Secrets e Cache)
+# 2. FUNÇÕES DE DADOS (Com Resiliência e Secrets)
 @st.cache_resource
 def conectar_google_sheets():
-    escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+    """Faz a conexão com a API do Google usando retry para falhas de rede."""
+    escopos = [
+        "https://www.googleapis.com/auth/spreadsheets", 
+        "https://www.googleapis.com/auth/drive"
+    ]
     
-    # --- AJUSTE DE SEGURANÇA: Lendo dos Secrets do Streamlit ---
-    try:
-        # Puxa o dicionário das chaves configuradas no painel do Streamlit
-        info_chaves = dict(st.secrets["gcp_service_account"])
-        
-        # Correção técnica para as quebras de linha na chave privada
-        if "private_key" in info_chaves:
-            info_chaves["private_key"] = info_chaves["private_key"].replace("\\n", "\n")
+    # Tenta conectar até 3 vezes caso o DNS falhe
+    for tentativa in range(3):
+        try:
+            # Puxa o dicionário das chaves configuradas nos Secrets do Streamlit
+            info_chaves = dict(st.secrets["gcp_service_account"])
             
-        creds = Credentials.from_service_account_info(info_chaves, scopes=escopos)
-        client = gspread.authorize(creds)
-        
-        url_da_planilha = "https://docs.google.com/spreadsheets/d/18XXK_Wqz2Stb_dFDb5sfl-u9W0B5kHqioc3Ar1xK2Is/edit"
-        return client.open_by_url(url_da_planilha).sheet1
-    except Exception as e:
-        st.error(f"Erro na conexão com Google: {e}")
-        st.stop()
+            # Ajuste para garantir que as quebras de linha da chave privada sejam lidas corretamente
+            if "private_key" in info_chaves:
+                info_chaves["private_key"] = info_chaves["private_key"].replace("\\n", "\n")
+                
+            creds = Credentials.from_service_account_info(info_chaves, scopes=escopos)
+            client = gspread.authorize(creds)
+            
+            url_da_planilha = "https://docs.google.com/spreadsheets/d/18XXK_Wqz2Stb_dFDb5sfl-u9W0B5kHqioc3Ar1xK2Is/edit"
+            return client.open_by_url(url_da_planilha).sheet1
+            
+        except Exception as e:
+            if tentativa < 2:
+                time.sleep(2) # Espera 2 segundos antes de tentar novamente
+                continue
+            else:
+                st.error(f"Erro crítico de conexão: {e}")
+                st.info("Dica: Verifique se as chaves nos Secrets estão corretas ou dê um Reboot no App.")
+                st.stop()
 
 @st.cache_data(ttl=60)
 def buscar_e_limpar_dados():
+    """Busca os dados da aba e aplica o tratamento de limpeza."""
     aba = conectar_google_sheets()
     df = pd.DataFrame(aba.get_all_records())
     
@@ -56,11 +69,11 @@ def buscar_e_limpar_dados():
     
     return df
 
-# Inicialização do carregamento
+# Inicialização do carregamento de dados
 try:
     df_base = buscar_e_limpar_dados()
 except Exception as e:
-    st.error(f"Erro ao processar dados: {e}")
+    st.error(f"Erro ao processar dados da planilha: {e}")
     st.stop()
 
 # 3. BARRA LATERAL - FILTROS
@@ -159,6 +172,6 @@ with tab_perdas:
 
 # --- ABA 3: META ADS ---
 with tab_ads:
-    st.info("🚧 Módulo Meta Ads em desenvolvimento. Em breve teremos dados de CPL e ROI.")
+    st.info("🚧 Módulo Meta Ads em desenvolvimento para a Dorneles Soluções. Em breve teremos dados de CPL e ROI.")
 
-st.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.caption(f"Última atualização: {datetime.now().strftime
