@@ -9,25 +9,28 @@ import time
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="BI Dorneles Soluções", layout="wide", page_icon="📊")
 
-# 2. CONEXÃO COM TRATAMENTO DE ASSINATURA (JWT)
+# 2. FUNÇÃO DE CONEXÃO (Ajustada para evitar o KeyError)
 @st.cache_resource
 def conectar_google_sheets():
+    # Verifica se a seção principal existe
+    if "gcp_service_account" not in st.secrets:
+        st.error("ERRO: A seção [gcp_service_account] não existe nos Secrets do Streamlit.")
+        st.info("Vá em Settings > Secrets e verifique se a primeira linha é [gcp_service_account]")
+        st.stop()
+
+    info_chaves = dict(st.secrets["gcp_service_account"])
     escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     
     try:
-        # Carrega os segredos do painel do Streamlit
-        info_chaves = dict(st.secrets["gcp_service_account"])
-        
-        # --- LIMPEZA DE ASSINATURA ---
+        # Limpeza da chave privada para evitar erro de assinatura JWT
         if "private_key" in info_chaves:
-            pk = info_chaves["private_key"]
-            # Remove aspas residuais e espaços nas extremidades
-            pk = pk.strip().strip('"').strip("'")
-            # Converte a sequência literal \n em quebras de linha reais
-            pk = pk.replace("\\n", "\n")
-            info_chaves["private_key"] = pk
+            pk = info_chaves["private_key"].strip().strip('"').strip("'")
+            info_chaves["private_key"] = pk.replace("\\n", "\n")
+        else:
+            st.error("ERRO: O campo 'private_key' não foi encontrado dentro de [gcp_service_account].")
+            st.stop()
 
-        # Usa o endpoint mais estável do Google
+        # Força o endpoint estável
         info_chaves["token_uri"] = "https://accounts.google.com/o/oauth2/token"
             
         creds = Credentials.from_service_account_info(info_chaves, scopes=escopos)
@@ -37,13 +40,17 @@ def conectar_google_sheets():
         return client.open_by_url(url_da_planilha).sheet1
         
     except Exception as e:
-        st.error(f"Erro de Autenticação (JWT): {e}")
+        st.error(f"Erro de Autenticação: {e}")
         st.stop()
 
 @st.cache_data(ttl=60)
 def buscar_e_limpar_dados():
     aba = conectar_google_sheets()
     df = pd.DataFrame(aba.get_all_records())
+    
+    if df.empty:
+        return df
+
     df.columns = df.columns.str.strip()
     
     # Tratamento de Moeda
@@ -59,23 +66,35 @@ def buscar_e_limpar_dados():
     df['Data de Entrada'] = pd.to_datetime(df['Data de Entrada'], dayfirst=True, errors='coerce')
     return df
 
-# Inicialização do App
+# Fluxo Principal
 try:
     df_base = buscar_e_limpar_dados()
+    
+    if df_base.empty:
+        st.warning("Planilha conectada, mas nenhum dado foi encontrado.")
+        st.stop()
+
+    # 3. INTERFACE DO DASHBOARD
+    st.title("📊 BI Dorneles Soluções")
+    
+    # Filtros simples
+    colunas = df_base.columns.tolist()
+    if 'Operador' in colunas:
+        sel_op = st.sidebar.multiselect("Operadores", options=sorted(df_base['Operador'].unique()), default=sorted(df_base['Operador'].unique()))
+        df_f = df_base[df_base['Operador'].isin(sel_op)]
+    else:
+        df_f = df_base
+
+    # Métricas
+    m1, m2 = st.columns(2)
+    m1.metric("Leads Totais", len(df_f))
+    if 'Valor Estimado' in df_f.columns:
+        m2.metric("Total Orçado", f"R$ {df_f['Valor Estimado'].sum():,.2f}")
+
+    st.subheader("Visualização dos Dados")
+    st.dataframe(df_f, use_container_width=True)
+
 except Exception as e:
-    st.error(f"Erro ao processar dados: {e}")
-    st.stop()
+    st.error(f"Erro ao carregar o dashboard: {e}")
 
-# 3. INTERFACE SIMPLIFICADA
-st.title("📊 BI Dorneles Soluções")
-
-# Resumo rápido para confirmar que funcionou
-m1, m2, m3 = st.columns(3)
-m1.metric("Total de Leads", len(df_base))
-m2.metric("Valor Orçado", f"R$ {df_base['Valor Estimado'].sum():,.2f}")
-m3.metric("Faturamento", f"R$ {df_base[df_base['Status'].str.lower() == 'fechado']['Valor Final'].sum():,.2f}")
-
-st.subheader("Visualização dos Dados")
-st.dataframe(df_base, use_container_width=True)
-
-st.caption(f"Sincronizado em: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+st.caption(f"Última tentativa de sincronização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
