@@ -1,6 +1,0 @@
-[theme]
-primaryColor = "#00D1FF"             # Um azul mais "neon" para destacar
-backgroundColor = "#121212"          # Preto puro para contraste máximo
-secondaryBackgroundColor = "#1E1E1E" # Cinza chumbo
-textColor = "#FFFFFF"                # Branco puro
-font = "serif"                       # Serif traz um ar de software premium/clássico
