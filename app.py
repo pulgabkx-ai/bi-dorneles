@@ -9,13 +9,12 @@ import time
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="BI Dorneles Soluções", layout="wide", page_icon="📊")
 
-# 2. FUNÇÕES DE DADOS (Máxima Resiliência)
+# 2. FUNÇÃO DE CONEXÃO COM RETRY AGRESSIVO
 @st.cache_resource
 def conectar_google_sheets():
-    """Conexão com retry agressivo para instabilidades de rede no Streamlit Cloud."""
     escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     
-    # Tentaremos 5 vezes com intervalos crescentes
+    # Tentaremos 5 vezes com espera progressiva
     for tentativa in range(5):
         try:
             info_chaves = dict(st.secrets["gcp_service_account"])
@@ -30,11 +29,11 @@ def conectar_google_sheets():
             
         except Exception as e:
             if tentativa < 4:
-                # Espera 2, 4, 6... segundos antes de tentar de novo
-                time.sleep(2 * (tentativa + 1)) 
+                # Espera 3, 6, 9... segundos para o DNS estabilizar
+                time.sleep(3 * (tentativa + 1)) 
                 continue
             else:
-                st.error(f"Erro crítico de conexão: {e}")
+                st.error(f"Erro Crítico de Rede: {e}")
                 st.stop()
 
 @st.cache_data(ttl=60)
@@ -59,12 +58,11 @@ def buscar_e_limpar_dados():
 try:
     df_base = buscar_e_limpar_dados()
 except Exception as e:
-    st.error(f"Erro ao carregar dados: {e}")
+    st.error(f"Não foi possível carregar os dados: {e}")
     st.stop()
 
 # 3. BARRA LATERAL
 st.sidebar.header("🎯 Painel de Controle")
-
 data_min = df_base['Data de Entrada'].min().to_pydatetime()
 data_max = df_base['Data de Entrada'].max().to_pydatetime()
 periodo = st.sidebar.date_input("Período de Entrada", value=(data_min, data_max))
@@ -84,11 +82,11 @@ if len(periodo) == 2:
 
 df_f = df_f[(df_f['Operador'].isin(sel_operadores)) & (df_f['Status'].isin(sel_status)) & (df_f['Cidade'].isin(sel_cidades))]
 
-# 5. UI
+# 5. DASHBOARD
 st.title("📊 BI Dorneles Soluções")
-tab_sucesso, tab_perdas, tab_ads = st.tabs(["🚀 Visão Geral", "🔍 Análise de Perdas", "📱 Meta Ads"])
+tab1, tab2, tab3 = st.tabs(["🚀 Visão Geral", "🔍 Perdas", "📱 Meta Ads"])
 
-with tab_sucesso:
+with tab1:
     m1, m2, m3, m4 = st.columns(4)
     total_est = df_f['Valor Estimado'].sum()
     df_fechado = df_f[df_f['Status'].str.lower() == 'fechado']
@@ -102,33 +100,22 @@ with tab_sucesso:
     col1, col2 = st.columns(2)
     with col1:
         df_funnel = df_f.groupby('Status')['Valor Estimado'].sum().reset_index().sort_values('Valor Estimado', ascending=False)
-        mapa_cores = {"Perdido": "#FF4B4B", "Fechado": "#2E8B57", "Em Aberto": "#1C83E1", "Orçamento Gerado": "#FACA2E"}
-        fig_funnel = px.funnel(df_funnel, y='Status', x='Valor Estimado', color='Status', color_discrete_map=mapa_cores)
-        st.plotly_chart(fig_funnel, use_container_width=True)
+        fig = px.funnel(df_funnel, y='Status', x='Valor Estimado', color='Status', color_discrete_map={"Perdido": "#FF4B4B", "Fechado": "#2E8B57", "Em Aberto": "#1C83E1", "Orçamento Gerado": "#FACA2E"})
+        st.plotly_chart(fig, use_container_width=True)
     with col2:
         fig_op = px.bar(df_f.groupby('Operador')['Valor Final'].sum().reset_index(), x='Operador', y='Valor Final', text_auto='.2s', color_discrete_sequence=['#2E8B57'])
         st.plotly_chart(fig_op, use_container_width=True)
 
-    st.subheader("📋 Detalhes dos Leads")
-    st.dataframe(df_f[['Data de Entrada', 'Cliente', 'Status', 'Operador', 'Valor Estimado', 'Valor Final']], use_container_width=True, hide_index=True)
-
-with tab_perdas:
+with tab2:
     df_p = df_f[df_f['Status'].str.lower() == 'perdido']
-    if df_p.empty:
-        st.success("Nenhuma perda registrada!")
+    if not df_p.empty:
+        motivos = df_p[df_p['Motivo da Perda'].str.strip() != '']
+        if not motivos.empty:
+            st.plotly_chart(px.pie(motivos, names='Motivo da Perda', values='Valor Estimado', hole=0.4), use_container_width=True)
     else:
-        st.header("❌ Análise de Desistências")
-        cp1, cp2 = st.columns(2)
-        with cp1:
-            motivos = df_p[df_p['Motivo da Perda'].str.strip() != '']
-            if not motivos.empty:
-                fig_pie = px.pie(motivos, names='Motivo da Perda', values='Valor Estimado', hole=0.4, color_discrete_sequence=px.colors.sequential.Reds_r)
-                st.plotly_chart(fig_pie, use_container_width=True)
-        with cp2:
-            fig_p_op = px.bar(df_p.groupby('Operador')['Valor Estimado'].sum().reset_index(), x='Operador', y='Valor Estimado', color_discrete_sequence=['#8B0000'])
-            st.plotly_chart(fig_p_op, use_container_width=True)
+        st.success("Nenhuma perda registrada!")
 
-with tab_ads:
-    st.info("🚧 Módulo Meta Ads em desenvolvimento.")
+with tab3:
+    st.info("Módulo Meta Ads em desenvolvimento.")
 
 st.caption(f"Última atualização: {datetime.now().strftime('%d/%m/%Y %H:%M')}")
