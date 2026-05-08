@@ -8,15 +8,28 @@ from datetime import datetime
 # 1. CONFIGURAÇÃO DA PÁGINA
 st.set_page_config(page_title="BI Dorneles Soluções", layout="wide", page_icon="📊")
 
-# 2. FUNÇÕES DE DADOS (Otimizadas com Cache)
+# 2. FUNÇÕES DE DADOS (Otimizadas com Secrets e Cache)
 @st.cache_resource
 def conectar_google_sheets():
     escopos = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-    # O arquivo abaixo deve estar na mesma pasta do app.py
-    creds = Credentials.from_service_account_file('credenciais-dorneles.json', scopes=escopos)
-    client = gspread.authorize(creds)
-    url_da_planilha = "https://docs.google.com/spreadsheets/d/18XXK_Wqz2Stb_dFDb5sfl-u9W0B5kHqioc3Ar1xK2Is/edit"
-    return client.open_by_url(url_da_planilha).sheet1
+    
+    # --- AJUSTE DE SEGURANÇA: Lendo dos Secrets do Streamlit ---
+    try:
+        # Puxa o dicionário das chaves configuradas no painel do Streamlit
+        info_chaves = dict(st.secrets["gcp_service_account"])
+        
+        # Correção técnica para as quebras de linha na chave privada
+        if "private_key" in info_chaves:
+            info_chaves["private_key"] = info_chaves["private_key"].replace("\\n", "\n")
+            
+        creds = Credentials.from_service_account_info(info_chaves, scopes=escopos)
+        client = gspread.authorize(creds)
+        
+        url_da_planilha = "https://docs.google.com/spreadsheets/d/18XXK_Wqz2Stb_dFDb5sfl-u9W0B5kHqioc3Ar1xK2Is/edit"
+        return client.open_by_url(url_da_planilha).sheet1
+    except Exception as e:
+        st.error(f"Erro na conexão com Google: {e}")
+        st.stop()
 
 @st.cache_data(ttl=60)
 def buscar_e_limpar_dados():
@@ -47,7 +60,7 @@ def buscar_e_limpar_dados():
 try:
     df_base = buscar_e_limpar_dados()
 except Exception as e:
-    st.error(f"Erro ao carregar dados: {e}")
+    st.error(f"Erro ao processar dados: {e}")
     st.stop()
 
 # 3. BARRA LATERAL - FILTROS
@@ -84,7 +97,6 @@ tab_sucesso, tab_perdas, tab_ads = st.tabs(["🚀 Visão Geral", "🔍 Análise 
 
 # --- ABA 1: VISÃO GERAL ---
 with tab_sucesso:
-    # Métricas de Topo
     m1, m2, m3, m4 = st.columns(4)
     total_est = df_f['Valor Estimado'].sum()
     df_fechado = df_f[df_f['Status'].str.lower() == 'fechado']
@@ -101,7 +113,6 @@ with tab_sucesso:
     with col1:
         st.subheader("🎯 Funil de Vendas")
         df_funnel = df_f.groupby('Status')['Valor Estimado'].sum().reset_index().sort_values('Valor Estimado', ascending=False)
-        # Mapa de cores consistente
         mapa_cores = {"Perdido": "#FF4B4B", "Fechado": "#2E8B57", "Em Aberto": "#1C83E1", "Orçamento Gerado": "#FACA2E"}
         fig_funnel = px.funnel(df_funnel, y='Status', x='Valor Estimado', color='Status', color_discrete_map=mapa_cores)
         st.plotly_chart(fig_funnel, use_container_width=True)
@@ -121,16 +132,15 @@ with tab_perdas:
     df_p = df_f[df_f['Status'].str.lower() == 'perdido']
     
     if df_p.empty:
-        st.success("Nenhuma perda registada no período selecionado!")
+        st.success("Nenhuma perda registrada no período selecionado!")
     else:
         st.header("❌ Análise de Desistências")
         cp1, cp2 = st.columns(2)
         
         with cp1:
-            # Gráfico de Pizza de Motivos (Filtra vazios)
             motivos = df_p[df_p['Motivo da Perda'].str.strip() != '']
             if not motivos.empty:
-                st.subheader("Porquê perdemos? (R$)")
+                st.subheader("Por que perdemos? (R$)")
                 fig_pie = px.pie(motivos, names='Motivo da Perda', values='Valor Estimado', 
                                  hole=0.4, color_discrete_sequence=px.colors.sequential.Reds_r)
                 st.plotly_chart(fig_pie, use_container_width=True)
